@@ -1,0 +1,831 @@
+---
+title: "COVID-19 EFFECTS ON FINANCIAL INCLUSION FOR MEXICO COMPARED TO THE US AND CANADA"
+author: "Magdaly Santillanez"
+date: "22.01.2025"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## 1. After the covid-19, has the world changed in terms of financial inclusion?
+- According to the World Bank (2022), financial inclusion is the cornerstone for development. After the COVID-19 pandemic there was an increase in accounts ownership and digital payments. However, it widened the gender gap worldwide. This study analyzes those trends to provide based evidence for public policy design.
+- The primary data base is produced by the World Bank each three years, from 2011 to 2021, and has indicators in financial inclusion by country. This data is complemented with macroeconomic indicators to provide a wide view across time. 
+- Mexico, United States and Canada are the main countries of the study. They formed a commercial alliance called USMCA, previous known as NAFTA. 
+
+## 2. Retrieving the Global Financial Inclusion Index from the World Bank
+- The database provides 800 indicators of financial inclusion across 160 countries. These indicators are summarized for the entire adult population and disaggregated by key demographic characteristics as gender, age, education, income, and are of residence (World Bank, 2024).  
+- The dataset is [publicly accessible](https://databank.worldbank.org/databases). It was collected anonymously,and there are no ethical concerns regarding its use. 
+- A potential limitation is that microdata, which allows more detail and disaggrergation, requires registration and can not be used to complement this research due to accessibility constraints. 
+
+Before obtaining the data, let's load the required libraries:
+```{r}
+#Suppress Messages for avoiding unnecessary messages in the results
+suppressPackageStartupMessages({
+library(RSelenium)
+library(tidyverse)
+library(netstat)
+library(rvest)
+})
+```
+
+1. I will set up directories for this section: 
+
+*Note: For full detail about the data management, please refer to Section 6 and to the READ ME file.*
+```{r}
+# 1. Consolidate directory creation
+# Specify the project directory where is the script
+project_dir <- getwd()
+
+# Define new directories
+#For non-processed data
+raw_data <- file.path(project_dir, "raw_data") 
+#Sub-folder for this query
+findex_data <- file.path(raw_data, "findex_data")
+
+# Create directories if they don't exist
+if (!dir.exists(raw_data)) dir.create(raw_data)
+if (!dir.exists(findex_data)) dir.create(findex_data)
+```
+
+2. Define URL for **primary** data source:
+```{r}
+url <- "https://databank.worldbank.org/source/global-financial-inclusion"
+```
+
+3. Set up Selenium and Browser:
+```{r}
+library(RSelenium)
+library(netstat)  # for free_port()
+
+# --- Standard Firefox session
+fopts <- list("moz:firefoxOptions" = list(args = list()))  # add '--headless' if you want headless
+
+rD <- rsDriver(
+  browser    = "firefox",
+  geckover   = "latest",     # GeckoDriver version (default is "latest")
+  chromever  = NULL,         # don't download ChromeDriver
+  iedrver    = NULL,         # (Windows only; skip)
+  phantomver = NULL,         # <-- IMPORTANT: exclude PhantomJS to avoid the 402 call
+  extraCapabilities = fopts,
+  verbose    = FALSE,
+  check      = FALSE,        # skip version checks to speed up / avoid extra downloads
+  port       = free_port()
+)
+
+# Assign folder to browser
+driver <- rD$client
+# Navigate to the World Bank's Global Findex page
+driver$navigate(url)
+# Allow time for the page to load
+Sys.sleep(2) 
+```
+
+4. Then, I will define a function for multiple clicks to avoid repetitive code. 
+
+*Note*: I will include 'tryCatch' in case any error arises as random pop-up windows, which not always appear. 
+```{r}
+# Define the function
+interaction_function <- function(driver, xpath, message_on_error = "Element was not found") {
+  tryCatch({
+    element <- driver$findElement(using = "xpath", value = xpath)
+    element$clickElement()
+    Sys.sleep(1)  
+  }, error = function(e) {
+    message(message_on_error)
+  })
+}
+```
+
+5. Define all Xpaths:
+```{r}
+# Define all type of XPaths: popups, filters, time, close indicator and download. 
+xpaths <- list(
+  popups = list(
+    cookies = '//button[contains(text(), "No, thanks")]',
+    feedback = '//*[@id="survey_img"]'
+  ),
+  filters = list(
+    country = '//a[contains(text(), "Country")]',
+    select_all_countries = '//a[contains(@class, "selectAll") and contains(@data-text, "Select All Country")]',
+    add_series = '//a[contains(@class, "addMoreRHS") and contains(@title, "Add Series")]',
+    indicators = c(
+      '//*[@id="chk[FinDex_Series_DIM].[Topic].&[account.t.d]"]',
+      '//*[@id="chk[FinDex_Series_DIM].[Topic].&[account.t.d.1]"]',
+      '//*[@id="chk[FinDex_Series_DIM].[Topic].&[account.t.d.2]"]',
+      '//*[@id="chk[FinDex_Series_DIM].[Topic].&[borrow.any]"]',
+      '//*[@id="chk[FinDex_Series_DIM].[Topic].&[g20.made.t.d]"]',
+      '//*[@id="chk[FinDex_Series_DIM].[Topic].&[save.any]"]'
+    ),
+    add_time = '//*[@id="addTimeBtn"]',
+    select_all_time = '//a[contains(@class, "btn selectAll btn-default") and contains(@data-text, "Select All Time")]',
+    close_popup = '//button[@title="Close"]'
+  ),
+  download = list(
+    dropdown = '//a[@title="Download options"]',
+    csv = '//a[@title="Download CSV Format"]'
+  )
+)
+```
+
+6. Execute all previously defined interactions
+```{r}
+# Handle pop-ups
+interaction_function(driver, xpaths$popups$cookies, "The cookie pop-up did not appear, I will proceed with next steps")
+interaction_function(driver, xpaths$popups$feedback, "No feedback pop-up found, I will proceed with next steps")
+
+# Interact with filters
+interaction_function(driver, xpaths$filters$country)               # Select "Country"
+interaction_function(driver, xpaths$filters$select_all_countries)  # Select "All Countries"
+interaction_function(driver, xpaths$filters$add_series)            # For "Add Series"
+
+# Loop through the indicators and click on them
+for (xpath in xpaths$filters$indicators) {
+  interaction_function(driver, xpath, sprintf("Error interacting with indicator: %s", xpath))
+}
+
+# Add time and select all time periods
+interaction_function(driver, xpaths$filters$add_time, "'Add Time' button not found")
+interaction_function(driver, xpaths$filters$select_all_time, "Select 'All Time' button not found")
+
+# Close the Pop-Up
+interaction_function(driver, xpaths$filters$close_popup, "'Close Pop-Up' button not found")
+
+# File download
+interaction_function(driver, xpaths$download$dropdown, "'Download dropdown' not found")
+Sys.sleep(3)  # Added delay before clicking download 
+interaction_function(driver, xpaths$download$csv, "'CSV download' option not found")
+Sys.sleep(5)  # Added delay for download
+message("File download has initiated. The directory is: ", findex_data)
+```
+
+7. Stop Selenium
+```{r}
+driver$close()
+rD$server$stop()
+```
+
+8. Un-zip the file and change name for a more descriptive indicator
+```{r}
+#Specify file location
+zip_file <- file.path(findex_data, "P_Data_Extract_From_Global_Financial_Inclusion.zip")
+# Unzip the file 
+unzip( zip_file, exdir = findex_data)
+
+#Replace name for a clearer descriptor
+downloaded_files <- list.files(findex_data, full.names = TRUE)
+
+  # 1. Rename the first file to "findex_data.csv"
+  file.rename(downloaded_files[1], file.path(findex_data, "findex_data.csv"))
+  
+  # 2. Rename the second file to "findex_series.csv"
+  file.rename(downloaded_files[2], file.path(findex_data, "findex_series.csv"))
+
+#Read the file:
+findex_data_file <- file.path(findex_data, "findex_data.csv")
+findex_indicators <- read_csv(findex_data_file, show_col_types = FALSE) 
+```
+
+## 3. Collecting main macro economic indicators and geo-spatial data
+
+Now, I will collect:
+
+  A. The **macro indicators** will provide critical context for understanding the financial behavior, inclusion patters and    changes for USMCA countries. While,
+  
+  B. The **geo-spatial information** will allow to graphically understand the main changes worldwide before and after the      pandemic.
+
+1. Let's load the API URL for the **macro indicator's** query by country and create folder: 
+
+```{r}
+#URL
+country_url <- "https://api.worldbank.org/v2/country/"
+
+# Path for new 'API' data inside 'raw_data' folder
+API_data <- file.path(raw_data, "API_data")
+
+# Check if the 'API data' folder exists, and create it if it doesn't
+if (dir.exists(API_data)) {} else {
+  dir.create(API_data)
+}
+```
+
+2. Load the required libraries: 
+```{r}
+#Add suppress start up messages for unnecessary content
+suppressPackageStartupMessages ({
+library(httr)
+library(jsonlite)
+library(dplyr)
+library(tidyr)
+})
+```
+
+For the query, I will define the list of indicators as inflation, GDP, Population, Education Expenditure, Poverty Ratio, Interest Rate, and Unemployment. The objective is to compare USMCA  financial inclusion performance in the pandemics, coupled with main macro-economic indicators. 
+
+According to the [API documentation](https://documents.worldbank.org/en/publication/documents-reports/api), it is not possible to consult more than one indicator at the same time. But it is possible to do it for multiple countries for the same indicator. Then, an optimal way to reduce the number of consults was to narrow the number of indicators while querying for all the countries at the same time. 
+
+3. Define the parameters, countries and time scope: 
+```{r}
+
+# Countries
+countries <- data.frame(
+  iso3 = c("MEX", "USA", "CAN"),  # ISO3 codes
+  name = c("Mexico", "United States", "Canada")  # Country names
+)
+
+#Parameters
+country_codes <- paste(countries$iso3, collapse = ";")  # Combine ISO3 codes for identify countries
+
+indicators <- c(
+  "FP.CPI.TOTL.ZG",        # Inflation
+  "NY.GDP.MKTP.CD",        # GDP 
+  "SP.POP.TOTL",           # Population
+  "SE.XPD.TOTL.GD.ZS",     # Expenditure on education
+  "SI.POV.DDAY",           # Poverty ratio
+  "FR.INR.RINR",           # Interest rate 
+  "SL.UEM.TOTL.ZS"         # Unemployment
+)
+
+#Time
+start_year <- 2011
+end_year <- 2024
+```
+*Note: The indicators and countries codes were obtained from the API documentation.*
+
+4. Now I will obtain details for indicators: I will consult the indicators API to create a catalog. Note this API is different from the previous one.
+```{r}
+indicators_url <- "https://api.worldbank.org/v2/indicator/"
+```
+
+5. Get the data:
+```{r}
+get_indicators <- function(indicator) {
+  url <- paste0(indicators_url, indicator, "?format=json")
+  response <- fromJSON(content(GET(url), as = "text"))
+  if (length(response) < 2 || is.null(response[[2]])) return(NULL)
+  response[[2]] %>%
+    as.data.frame() %>%
+    select(id, name, sourceNote) %>%
+    rename(Series_Code = id, Indicator = name, Description = sourceNote)
+}
+
+#Establish file path
+indicators_catalog <- bind_rows(lapply(indicators, get_indicators))
+```
+
+6. Then, I will design the query for the World Bank API for a single indicator and multiple countries to reduce as much as possible the number of consults.
+```{r}
+# Function to collect data for a single indicator for multiple countries
+indicator_data <- function(indicator, country_codes, start_year, end_year) {
+  url <- paste0(country_url, country_codes, "/indicator/", indicator, "?format=json&date=", start_year, ":", end_year)
+  response <- GET(url)
+  
+  if (status_code(response) != 200) {
+    stop("Failed to collect data for indicator: ", indicator)
+  }
+  
+  data <- fromJSON(content(response, as = "text"))
+  
+  # Check if data is valid
+  if (length(data) < 2 || is.null(data[[2]])) {
+    warning("No data available for indicator: ", indicator)
+    return(NULL)
+  }
+  
+  # Extract the data and add the description
+  df <- data[[2]] %>%
+    select(date, value, countryiso3code) %>%
+    mutate(
+      Series_Code = indicator 
+    )
+  return(df)
+}
+
+# Collect data for all indicators and include descriptions
+all_indicator_data <- lapply(indicators, function(ind) {
+  indicator_data(ind, country_codes, start_year, end_year)
+})
+
+#USMCA raw
+USMCA_indicators_raw <- bind_rows(all_indicator_data)
+```
+
+
+Now, let's download the **geospatial data**. This data is publicly available and comes from [North American Cartographic Information Society (NACIS)](https://www.naturalearthdata.com), which supports the sharing of geographic and spatial data resources. 
+
+1. Define the URL for downloading the shapefile 
+```{r}
+geom.data <- "https://naciscdn.org/naturalearth/10m/cultural/ne_10m_admin_0_countries.zip"
+```
+
+2. Define the folder and the path for downloading it: 
+```{r}
+# Path for new 'shapefile' folder inside 'raw_data' folder
+shape_data <- file.path(raw_data, "shape_data")
+
+# Check if the 'shapefile' folder exists, and create it if it doesn't
+if (dir.exists(shape_data)) {} else {
+  dir.create(shape_data)
+}
+
+# File path to save the downloaded file
+geom.file <- file.path(shape_data, basename(geom.data))
+```
+
+3. Un-zip the file and store it in the folder: 
+```{r}
+# Check if the file already exists
+if (!file.exists(geom.file)) {
+  message("Downloading the shape data...")
+#Download and unzip the file: 
+  download.file(geom.data, geom.file, mode = "wb") 
+  unzip(geom.file, exdir = shape_data)
+  
+# Confirmation message
+  message("File downloaded successfully to: ", geom.file)
+} else {
+  message("File already exists at: ", geom.file)
+}
+#Read shp file:
+suppressPackageStartupMessages (library(sf))
+world_shp <- st_read(file.path(shape_data, "ne_10m_admin_0_countries.shp"))
+```
+
+## 4. Transformation of the data for the analysis 
+
+1. Create directory 
+```{r}
+# Define directory
+processed_data <- file.path(project_dir, "procesed_data")
+
+# Create directory if it does not exist
+if (!dir.exists(processed_data)) dir.create(processed_data)
+```
+
+2. Homologate name of variables, data type, and not required data.
+```{r}
+library(tidyverse)
+library(dplyr)
+
+# 1. Findex indicators to long version: 
+findex_indicators_long <- findex_indicators %>%
+  pivot_longer(
+    cols = starts_with("20"),  # Automatically selects columns starting with '20'
+    names_to = "Year",
+    values_to = "Value"
+  ) %>%
+  mutate(Year = as.numeric(str_extract(Year, "\\d{4}")), #Convert year to numeric
+          Value = as.numeric(Value)) %>% #Convert Value to numeric  
+  rename(
+    Country = `Country Name`,
+    Country_Code = `Country Code`,
+    Indicator = `Series Name`,
+    Series_Code = `Series Code`
+  ) %>% select (all_of(order(colnames(.))))
+
+
+# 2. USMCA Indicators: Combine, transform, and reshape indicators data
+USMCA_indicators <- bind_rows(all_indicator_data) %>%
+  mutate(Year = as.numeric(date)) %>%  
+  select(-date) %>%
+  rename(
+    Value = value,
+    Country_Code = countryiso3code
+  ) %>%
+  arrange(Country_Code, Year) %>%
+  left_join(countries, by = c("Country_Code" = "iso3")) %>%
+  rename(Country = name)%>% 
+  left_join(indicators_catalog %>% select (Series_Code, Indicator),
+  by = c("Series_Code" = "Series_Code")) %>%
+  select (all_of(order(colnames(.))))
+
+# 3. Review column names and same type
+colnames(findex_indicators_long)
+colnames(USMCA_indicators)
+
+str(findex_indicators_long)
+str(USMCA_indicators)
+
+# 4. Combine and save: 
+all_indicators <- bind_rows(findex_indicators_long, USMCA_indicators)
+```
+
+3. Ensure data is tidy tabular data: The following information demonstrates that each column represents a variable, each row represents an observation and each cell contains a single value.
+```{r}
+# Verify the structure of the dataset
+head(all_indicators, n=3)
+```
+
+4. Now, I will proceed with doing 5 transformations to the all indicators data base:
+```{r}
+# 1. Calculate the GDP growth
+gdp_growth <- all_indicators %>%
+  filter(Series_Code == "NY.GDP.MKTP.CD") %>% # Select only GDP-related rows
+  group_by(Country) %>%
+  mutate(
+    GDP_Growth = (Value - lag(Value)) / lag(Value) * 100  # Calculate GDP growth
+  ) %>%
+  ungroup()
+
+# 2. Create a categorical variable for pre and post COVID-19
+all_indicators <- all_indicators %>%
+  mutate(Period = ifelse(Year < 2020, "Pre-COVID", "Post-COVID"))
+
+# 3. Calculate the amount of government expenditure in education
+educ_exp <- all_indicators%>%
+  filter(Series_Code %in% c("SE.XPD.TOTL.GD.ZS", "NY.GDP.MKTP.CD")) %>%
+  select(Country, Year, Series_Code, Value) %>%
+  pivot_wider(names_from = Series_Code, values_from = Value) %>%
+  mutate(
+    Education_Expenditure = SE.XPD.TOTL.GD.ZS / 100 * NY.GDP.MKTP.CD  # Calculating expenditure
+  )
+
+# 4. Calculate gender gap: difference between male and female account ownership
+gender_gap <- all_indicators %>%
+  filter(Series_Code %in% c("account.t.d.1", "account.t.d.2")) %>% # Filter for Female and Male
+  mutate(Value = as.numeric(Value)) %>% # Ensure Value is numeric
+  group_by(Country, Year) %>%
+  summarize(
+    Female = sum(Value[Series_Code == "account.t.d.1"], na.rm = TRUE),
+    Male = sum(Value[Series_Code == "account.t.d.2"], na.rm = TRUE),
+    Gender_Gap = Male - Female, # Calculate the gap
+    .groups = "drop" ) %>%       
+  mutate(
+    Female = na_if(Female, 0),
+    Male = na_if(Male, 0),
+    Gender_Gap = na_if(Gender_Gap, 0)) # Replace zero values with NA
+
+# 5. Normalize inflation rates
+inflation_normalized <- all_indicators %>%
+  filter(Series_Code == "FP.CPI.TOTL.ZG") %>%  # Select indicator
+  group_by(Country) %>%
+  mutate(
+    Inflation_Z_Score = (Value - mean(Value, na.rm = TRUE)) / sd(Value, na.rm = TRUE)  # Formula for Z-score 
+  ) %>%
+  ungroup()
+```
+
+## 5. What can the data tell us? 
+
+Let's analyze the global situation and then, move to the three countries object of the study: 
+ 
+1. Load libraries: 
+```{r}
+# Load necessary libraries
+suppressPackageStartupMessages({
+  library(ggplot2)
+  library(tidyverse)
+  library(sf)
+  library(terra)
+  library(readxl)
+  library(viridis)
+})
+```
+
+And create the folder for storing the visual outputs: 
+```{r}
+# Define directory
+graphics_output <- file.path(project_dir, "outputs")
+# Create directory if it does not exist
+if (!dir.exists(graphics_output)) dir.create(graphics_output)
+```
+
+2. Prepare data:
+```{r}
+# Filter data for the indicator 'Account (% age 15+)' in relevant years
+findex_account_map <- findex_indicators_long %>%
+  filter(Series_Code %in% c("account.t.d"), 
+         Year %in% c(2017, 2021, 2022)) %>%
+  drop_na(Value)
+
+# Merge the World Bank data with the shapefile
+merged_df <- world_shp %>%
+  left_join(findex_account_map, by = c("ADM0_A3" = "Country_Code"))
+```
+
+3. Create plot: 
+
+- The selected colors are not from a colorblind friendly palette. But, the semaphore design highlights how countries improved their access to bank accounts by changing from reddish to greener tones. 
+
+```{r}
+# Function to generate the plot
+generate_plot <- function(data, year_range) {
+  data %>%
+    filter(Year %in% year_range) %>%
+    ggplot() +
+    geom_sf(aes(fill = Value), color = "white", linewidth = 0.2) +  # Map aesthetics
+    scale_fill_gradientn(
+      colors = c("#A50026", "#FDAE61", "#1A9850"),  # Custom gradient colors
+      name = "% Account Access (age 15+)",
+      na.value = "black"  # Color for non-data
+    ) +
+    labs(
+      title = paste("Global Financial Inclusion:", paste(year_range, collapse = ", ")),
+      subtitle = "Percentage of Adults with Bank Account Access",
+      caption = "Source: World Bank Global Findex, 2021."
+    ) +
+    theme_minimal(base_size = 13) +
+    theme(
+      plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 12, hjust = 0.5, margin = margin(b = 10)),
+      plot.caption = element_text(size = 10, color = "darkgrey", hjust = 1),
+      legend.position = "top",
+      legend.key.width = unit(2, "cm"),
+      legend.key.height = unit(0.4, "cm"),
+      legend.text = element_text(size = 8),
+      axis.text = element_blank(),
+      axis.ticks = element_blank(),
+      panel.grid = element_blank()
+    )
+}
+
+# Generate and display plots for 2017 and 2021 (or 2022)
+plot_2017 <- generate_plot(merged_df, 2017)
+plot_2021 <- generate_plot(merged_df, c(2021, 2022))
+
+# Print the plots
+print(plot_2017)
+print(plot_2021)
+
+```
+
+Now, I will analyze for the USMCA countries: 
+
+- One limitation is that I do not have enough information about the interest rate. Then, I will use the inflation rate as a proxy to analyze how much people paid for borrowing money. 
+```{r}
+# Omit NA values and ensure 'Year' is included
+data_filtered_2 <- all_indicators %>%
+  filter(Country_Code %in% c("MEX", "CAN", "USA")) %>%
+  filter(Series_Code %in% c("borrow.any", "FP.CPI.TOTL.ZG", "FR.INR.RINR")) %>%
+  drop_na(Value) # Remove rows with NA in specified columns
+
+# Split data for bars and lines
+data_borrow <- data_filtered_2 %>%
+  filter(Series_Code == "borrow.any")
+
+data_inflation <- data_filtered_2 %>%
+  filter(Series_Code == "FP.CPI.TOTL.ZG")
+
+data_interest <- data_filtered_2 %>%
+  filter(Series_Code == "FR.INR.RINR")
+
+borrow_inflation <- ggplot() +
+  # Bars for Borrowing Behavior
+  geom_bar(
+    data = data_borrow,
+    aes(x = Year, y = Value, fill = Country),
+    stat = "identity",
+    alpha = 0.6,
+    position = "dodge"
+  ) +
+  # Lines for Inflation with linetypes and markers
+  geom_line(
+    data = data_inflation,
+    aes(x = Year, y = Value * 10, color = Country, group = Country, linetype = Country),
+    linewidth = 0.8
+  ) +
+  geom_point(
+    data = data_inflation,
+    aes(x = Year, y = Value * 10, color = Country, shape = Country),
+    size = 0.8
+  ) +
+  # Annotations for events (e.g., COVID-19)
+  annotate("rect", xmin = 2020, xmax = 2021, ymin = -Inf, ymax = Inf, 
+           alpha = 0.1, fill = "grey") +
+  annotate("text", x = 2020.5, y = 50, label = "COVID-19 Impact", 
+           hjust = 0.5, color = "black", size = 4) +
+  # Labels and Scales
+  labs(
+    title = "Borrowing Behavior and Inflation Over Time (USMCA Countries)",
+    subtitle = "Overlapping Financial Inclusion (Bars) and Inflation (Lines)",
+    x = "Year",
+    y = "Borrowing Behavior (% age 15+)",
+    caption = "Source: World Bank Global Findex and World Development Indicators, 2021.",
+    fill = "Borrowing (Bars)",
+    color = "Inflation (Lines)",
+    linetype = "Country",
+    shape = "Country"
+  ) +
+  # Y-axis with secondary scale
+  scale_y_continuous(
+    name = "Borrowing Behavior (% age 15+)",
+    sec.axis = sec_axis(~ . / 10, name = "Inflation Rate (%)") # Adjust inflation scaling
+  ) +
+  # Colors for bars and lines
+  scale_fill_manual(
+    values = c(
+      "Mexico" = "#A50026",    
+      "Canada" = "#FDAE61",     
+      "United States" = "#1A9850"
+    )
+  ) +
+  scale_color_manual(
+    values = c(
+      "Mexico" = "#A50026",    
+      "Canada" = "#FDAE61",     
+      "United States" = "#1A9850"
+    )
+  ) +
+  scale_linetype_manual(values = c("solid", "dashed", "dotted")) +
+  scale_shape_manual(values = c(16, 17, 18)) + # Circle, triangle, square
+  # Theme for Clarity
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5, margin = margin(b = 10)),
+    plot.caption = element_text(size = 10, color = "darkgrey", hjust = 1),
+    legend.position = "top",
+    legend.title = element_text(face = "bold"),
+    legend.text = element_text(size = 10),
+    axis.title.y.right = element_text(color = "black"),
+    axis.text = element_text(size = 10),
+    axis.title = element_text(size = 11),
+    panel.grid.major.y = element_line(color = "grey80"),
+    panel.grid.minor = element_blank(),
+    plot.margin = margin(20, 20, 20, 20)
+  )
+
+print(borrow_inflation)
+
+```
+
+- How was the gender gap in account ownership across time?
+```{r}
+# Filter data for USMCA
+filtered_data <- gender_gap %>%
+  filter(Country %in% c("Mexico", "Canada", "United States") & !is.na(Gender_Gap))
+
+account_trend <- ggplot(filtered_data, aes(x = Year, y = Gender_Gap, color = Country, group = Country)) +
+  # Lines and Points for better visualization
+  geom_line(linewidth = 1, aes(linetype = Country)) +
+  geom_point(size = 2, aes(shape = Country)) +
+  
+  annotate("rect", xmin = 2020, xmax = 2021, ymin = -Inf, ymax = Inf, alpha = 0.2, fill = "grey") +
+  annotate("text", x = 2021, y = 5, label = "COVID-19 Impact", hjust = 0.5, vjust = 1.5, color = "black", size = 4) +
+  
+  # Colors
+  scale_color_manual(
+    name = "Country",
+    values = c(
+      "Mexico" = "#A50026",    
+      "Canada" = "#FDAE61",     
+      "United States" = "#1A9850"
+    )
+  ) +
+  
+  # Axis and Gridlines
+  scale_x_continuous(
+    breaks = c(2011, 2014, 2017, 2021, 2022),
+    labels = c("2011", "2014", "2017", "2021", "2022")
+  ) +
+  scale_y_continuous(
+    expand = expansion(mult = c(0.05, 0.1))  # Add space above/below points
+  ) +
+  
+  # Labels
+  labs(
+    title = "Gender Gap in Account Ownership (USMCA Countries)",
+    subtitle = "Percentage difference in account ownership between men and women (2011-2022)",
+    x = "Year",
+    y = "Gender Gap (%)",
+    caption = "Source: World Bank Global Findex, 2021."
+  ) +
+  
+  # Theme minimal
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5, margin = margin(b = 10)),
+    plot.caption = element_text(size = 10, color = "darkgrey", hjust = 1, margin = margin(t = 10)),
+    legend.position = "top",
+    legend.title = element_text(face = "bold", size = 11),
+    legend.text = element_text(size = 10),
+    legend.key = element_blank(),
+    legend.spacing.x = unit(0.3, "cm"),
+    axis.text = element_text(size = 10),
+    axis.title = element_text(size = 11),
+    panel.grid.major.y = element_line(color = "grey80"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.border = element_blank(),
+    plot.margin = margin(20, 20, 20, 20)
+  )
+
+print(account_trend)
+
+```
+
+Since 2017 the gender gap for Mexico has widened, being worse in 2021.
+
+-Finally, how did savings, borrowing and digital payments perform? Is there a possible correlation which could be further analyzed? 
+```{r}
+# Renaming indicators for the graph
+data_filtered_3 <- all_indicators %>%
+  filter(Country_Code %in% c("MEX", "CAN", "USA")) %>%
+  filter(Series_Code %in% c("g20.made.t.d", "save.any", "borrow.any")) %>%
+  drop_na(Value) %>%
+  mutate(Series_Code = case_when(
+    Series_Code == "g20.made.t.d" ~ "Digital Payments",
+    Series_Code == "save.any" ~ "Savings",
+    Series_Code == "borrow.any" ~ "Borrowing",
+    TRUE ~ Series_Code
+  ))
+
+# Creating the plot
+main_trends <- ggplot(data_filtered_3, aes(x = Year, y = Value, group = interaction(Country_Code, Series_Code), 
+                            color = Country_Code, linetype = Series_Code)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 1.8, aes(shape = Series_Code)) +
+  
+  # Identifying COVID-19 period
+  annotate("rect", xmin = 2020, xmax = 2021, ymin = -Inf, ymax = Inf, fill = "grey", alpha = 0.2) +
+  annotate("text", x = 2020.5, y = max(data_filtered_3$Value, na.rm = TRUE), 
+           label = "COVID-19", hjust = 0.5, color = "black", size = 3) +
+  
+
+  facet_wrap(~Country_Code, nrow = 1) +
+  
+  # Theme colors
+  scale_color_manual(
+    values = c("MEX" = "#A50026", "CAN" = "#FDAE61", "USA" = "#1A9850"),
+    name = "Country"
+  ) +
+  scale_shape_manual(
+    values = c("Digital Payments" = 16, "Savings" = 17, "Borrowing" = 18),  
+    name = "Indicator"
+  ) +
+  scale_linetype_manual(
+    values = c("Digital Payments" = "solid", "Savings" = "dashed", "Borrowing" = "dotted"),  # Corrected levels
+    name = "Indicator"
+  ) +
+  
+  # Labels and titles
+  labs(
+    title = "Trends in Digital Payments, Savings, and Borrowing (USMCA Countries)",
+    subtitle = "Data from 2011 to 2022 with a focus on the COVID-19 period.",
+    x = "Year",
+    y = "Indicator Value",
+    caption = "Source: World Bank Global Findex, 2021."
+  ) +
+  
+  # Theme customization
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(size = 8, hjust = 0.5, margin = margin(b = 10)),
+    plot.caption = element_text(size = 8, color = "darkgrey", hjust = 1),
+    legend.position = "top",
+    legend.title = element_text(face = "bold", size = 11),
+    legend.text = element_text(size = 9),
+    legend.key = element_blank(),
+    axis.text = element_text(size = 9),
+    axis.title = element_text(size = 9),
+    strip.text = element_text(size = 7, face = "bold"),
+    panel.grid.major.y = element_line(color = "grey80"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.border = element_blank(),
+    plot.margin = margin(20, 20, 20, 20)
+  )
+
+print(main_trends)
+```
+
+## 6. Data and output storage for easily reproduction
+
+I will save the information to the right folder: 
+
+- Raw Data
+```{r}
+write.csv(indicators_catalog, file.path(API_data, "indicators_catalog.csv")) # Save indicators catalog
+write.csv(USMCA_indicators_raw, file.path(API_data, "USMCA_raw.csv"))
+```
+
+- Processed Data
+```{r}
+write.csv(findex_indicators_long, file.path(processed_data, "findex_indicators_long.csv"), row.names = FALSE) #findex
+write.csv(USMCA_indicators, file.path(processed_data, "USMCA_indicators.csv"), row.names = FALSE) #USMCA
+write.csv(all_indicators, file.path(processed_data, "all_indicators.csv"), row.names = FALSE) #Consolidated
+```
+
+- Outputs
+```{r}
+# Design a list and a loop for saving plots:
+plots_to_save <- list(
+  "outputs/global_inclusion_2017.png" = plot_2017,
+  "outputs/global_inclusion_2021.png" = plot_2021,
+  "outputs/borrowing_and_inflation.png" = borrow_inflation,
+  "outputs/account_trend.png" = account_trend,
+  "outputs/main_trends.png" = main_trends
+)
+
+# Save all plots
+for (filename in names(plots_to_save)) {
+  ggsave(plots_to_save[[filename]], filename = filename, width = 10, height = 7, dpi = 96, bg = "white") #dpi set to 96 for saving data memory and background white
+}
+```
+
+*Note:* Some files were saved in previous sections because they contained raw data, making it easier to store them at that stage. For more details, please refer to the ReadMe file.
+
